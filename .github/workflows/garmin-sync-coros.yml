@@ -3,7 +3,12 @@ name: garmin-sync-coros
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/30 * * * ?'
+    - cron: '*/30 * * * *'  # 每 30 分钟（UTC）
+
+concurrency:
+  group: garmin-sync-coros
+  cancel-in-progress: false  # false = 新运行会排队；true = 新运行会取消进行中的旧运行
+
 env:
   GITHUB_NAME: GYanlong
   GITHUB_EMAIL: guoyanlong2012@gmai.com
@@ -22,34 +27,74 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Ensure db directory exists
+        run: |
+          mkdir -p db
+
       - name: Set up Python 3.10
         uses: actions/setup-python@v3
         with:
           python-version: '3.10'
-      # from pdm
-      - name: Set Variables
-        id: set_variables
-        run: |
-          echo "::set-output name=PY::$(python -c 'import hashlib, sys;print(hashlib.sha256(sys.version.encode()+sys.executable.encode()).hexdigest())')"
-          echo "::set-output name=PIP_CACHE::$(pip cache dir)"
-      - name: Cache PIP
-        uses: actions/cache@v3
-        with:
-          path: ${{ steps.set_variables.outputs.PIP_CACHE }}
-          key: Ubuntu-pip-${{ steps.set_variables.outputs.PY }}
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-        if: steps.pip-cache.outputs.cache-hit != 'true'
+
       - name: Run Garmin Sync
         run: |
+          # 如果你的脚本支持指定 DB 路径，请优先改脚本以直接写入 db/activities.db
           python scripts/garmin/garmin_sync_coros.py
-      - name: Push new cookie
+
+      - name: Locate and move sqlite DB into db/ directory
         run: |
-          git config --local user.email "${{ env.GITHUB_EMAIL }}"
-          git config --local user.name "${{ env.GITHUB_NAME }}"
+          set -e
+          # 常见可能的位置，按需增减
+          if [ -f "data/activities.db" ]; then
+            mv -f data/activities.db db/activities.db
+            echo "Moved data/activities.db -> db/activities.db"
+          fi
+          if [ -f "activities.db" ]; then
+            mv -f activities.db db/activities.db
+            echo "Moved activities.db -> db/activities.db"
+          fi
+          if [ -f "db/activities.db" ]; then
+            echo "DB present at db/activities.db"
+          else
+            echo "No sqlite DB found in expected locations; skipping move"
+          fi
+
+      - name: Commit & push sqlite DB back to repo
+        env:
+          DB_PATH: db/activities.db
+        run: |
+          set -e
+          if [ ! -f "${DB_PATH}" ]; then
+            echo "DB not found at ${DB_PATH}, skipping commit"
+            exit 0
+          fi
+
+          git config user.email "${{ env.GITHUB_EMAIL }}"
+          git config user.name "${{ env.GITHUB_NAME }}"
+
+          git add "${DB_PATH}"
+          git commit -m "chore: update sqlite DB (automated)" || echo "nothing to commit"
+
+          # 尝试推送；若远端拒绝（如保护分支），尝试 pull --rebase 再推
+          if ! git push "origin" "HEAD:${{ github.ref_name }}"; then
+            echo "Push failed; attempting pull --rebase then push"
+            git pull --rebase origin "${{ github.ref_name }}" || true
+            git push "origin" "HEAD:${{ github.ref_name }}" || echo "Final push failed; target branch may be protected. Consider PR-based workflow."
+          fi
+
+      - name: Push other changes (cookies etc.)
+        run: |
           git add .
           git commit -m 'update garmin activity' || echo "nothing to commit"
           git push || echo "nothing to push"
