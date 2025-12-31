@@ -3,7 +3,7 @@ name: garmin-sync-coros
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/5 * * * ?'
+    - cron: '11 2 * * ?'
 env:
   GITHUB_NAME: GYanlong
   GITHUB_EMAIL: guoyanlong2012@gmai.com
