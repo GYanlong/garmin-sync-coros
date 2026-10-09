@@ -10,6 +10,10 @@ from .garmin_url_dict import GARMIN_URL_DICT
 
 logger = logging.getLogger(__name__)
 
+# 持久化 garth token 目录;GitHub Actions 通过 actions/cache@v3 跨 run 复用。
+# 本地运行时默认落到 ~/.garth,需要换位置只需改这里。
+GARTH_TOKEN_DIR = os.path.expanduser("~/.garth")
+
 
 def is_duplicate_activity(detailed_import_result):
   """Return whether Garmin's import response reports a duplicate activity."""
@@ -47,21 +51,55 @@ class GarminClient:
             "origin": GARMIN_URL_DICT.get("SSO_URL_ORIGIN"),
             "nk": "NT"
         }
-  
-  ## 登录装饰器
-  def login(func):    
-    def ware(self, *args, **kwargs):    
-      try:
-         garth.client.username
-      except Exception:
-        logger.warning("Garmin is not logging in or the token has expired.")
+        # 单次 run 内只登录一次;装饰器据此短路
+        self._logged_in = False
+
+  ## 登录装饰器 — 优先复用持久化 token,缓存失效才走密码登录
+  def login(func):
+    def ware(self, *args, **kwargs):
+      # 1) 本次 run 已经登录过 → 直接放行(garth 是模块级单例,登录一次就够)
+      client = self.garthClient.client
+      if self._logged_in and client.oauth2_token is not None:
+        return func(self, *args, **kwargs)
+
+      # 2) 尝试加载上次缓存的 oauth2 token(GH Actions 走 actions/cache 跨 run 复用)
+      loaded = False
+      if os.path.isdir(GARTH_TOKEN_DIR):
+        try:
+          # garth 0.4.38 没有模块级 garth.load(),必须走 garth.client.load()
+          client.load(GARTH_TOKEN_DIR)
+          loaded = client.oauth2_token is not None
+          if loaded:
+            logger.info("Loaded garth tokens from %s", GARTH_TOKEN_DIR)
+        except Exception as load_err:
+          logger.debug("Load cached garth tokens failed: %s", load_err)
+
+      # 3) 没缓存或缓存失效 → 密码登录
+      if not loaded:
+        logger.warning(
+          "Garmin is not logging in or the token has expired; "
+          "falling back to password login."
+        )
         if self.auth_domain and str(self.auth_domain).upper() == "CN":
           self.garthClient.configure(domain="garmin.cn")
-        self.garthClient.login(self.email, self.password)
-        
-        # del self.garthClient.sess.headers['User-Agent']
-        del self.garthClient.client.sess.headers['User-Agent']
+        try:
+          self.garthClient.login(self.email, self.password)
+        except Exception as login_err:
+          logger.error("Garmin password login failed: %s", login_err)
+          raise
 
+        # 4) 登录成功 → 把 token 落盘供下次 run 复用
+        try:
+          os.makedirs(GARTH_TOKEN_DIR, exist_ok=True)
+          self.garthClient.save(GARTH_TOKEN_DIR)
+          logger.info("Saved garth tokens to %s", GARTH_TOKEN_DIR)
+        except Exception as save_err:
+          logger.warning("Failed to save garth tokens: %s", save_err)
+
+      # 5) 去掉 garth 默认 UA(没有就跳过),统一用我们自己的
+      client.sess.headers.pop("User-Agent", None)
+
+      self._logged_in = True
       return func(self, *args, **kwargs)
     return ware
   

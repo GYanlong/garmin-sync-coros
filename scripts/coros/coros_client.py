@@ -41,7 +41,15 @@ class CorosClient:
         login_body = json.dumps(login_data)
         response = self.req.request('POST', login_url, body=login_body, headers=headers)
 
-        login_response = json.loads(response.data)
+        # 真实响应可能是 HTML 拦截页 / 空 body(被风控时会触发),把异常信息丰富一些便于排查
+        try:
+            login_response = json.loads(response.data)
+        except json.JSONDecodeError as err:
+            raise CorosLoginError(
+                f"Coros login 返回非 JSON (status={response.status}, "
+                f"body[:200]={response.data[:200]!r})"
+            ) from err
+
         login_result = login_response["result"]
         if login_result != "0000":
             raise CorosLoginError("Coros login anomaly, the reason for the anomaly is:" + login_response["message"])
