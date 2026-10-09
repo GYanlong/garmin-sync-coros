@@ -120,13 +120,13 @@ if __name__ == "__main__":
       activity_id = activity["activityId"]
       garmin_db.saveActivity(activity_id)
 
-  
+
 
   un_sync_id_list = garmin_db.getUnSyncActivity()
   if un_sync_id_list == None or len(un_sync_id_list) == 0:
       exit()
   file_path_list = []
-  
+
   for un_sync_id in un_sync_id_list:
     try:
       file = garminClient.downloadFitActivity(un_sync_id)
@@ -140,9 +140,10 @@ if __name__ == "__main__":
       }
 
       file_path_list.append(un_sync_info)
-      
+
     except Exception as err:
       print(err)
+  sync_failed = False
   for un_sync_info in file_path_list:
     try:
       client = None
@@ -167,4 +168,6 @@ if __name__ == "__main__":
     except Exception as err:
       print(err)
       garmin_db.updateExceptionSyncStatus(un_sync_id)
-      exit()
+      sync_failed = True
+  if sync_failed:
+    sys.exit(1)

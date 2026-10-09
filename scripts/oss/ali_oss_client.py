@@ -64,7 +64,7 @@ class AliOssClient:
 
         auth = oss2.StsAuth(self.access_key_id, self.access_key_secret, self.security_token)
         self.client = oss2.Bucket(auth, "https://oss-cn-beijing.aliyuncs.com", self.bucket)
-
+    
     def multipart_upload(self, filePath, fileName):
         key = f"fit_zip/{fileName}"
         print(key)
@@ -92,13 +92,13 @@ class AliOssClient:
                 part_number += 1
 
         # 完成分片上传。
-        # 如需在完成分片上传时设置相关Headers，请参考如下代码。
+        # 如需在完成分片上传时设置相关Headers，请参考如下示例代码。
         headers = dict()
         # 设置文件访问权限ACL。此处设置为OBJECT_ACL_PRIVATE，表示私有权限。
         # headers["x-oss-object-acl"] = oss2.OBJECT_ACL_PRIVATE
         r = self.client.complete_multipart_upload(key, upload_id, parts, headers=headers)
         return key
-
+    
 
 
 
